@@ -56,9 +56,8 @@ class Scraper(object):
         self.user_agent.set_handle_robots(False)
         self.user_agent.addheaders = [('User-agent', config.USER_AGENT_NAME)]
         # Queues
-        if self.options.workfromqueue:
-            self.session_queue = queue.Queue('SCRAPEARIS_SESSIONS', config, db)
-            self.submission_queue = queue.Queue('SCRAPEARIS_SUBMISSIONS', config, db)
+        self.session_queue = queue.Queue('SCRAPEARIS_SESSIONS', config, db)
+        self.submission_queue = queue.Queue('SCRAPEARIS_SUBMISSIONS', config, db)
         # system info (PHP/ASP)
         self.template_system = None
         self.urls = None
@@ -328,7 +327,7 @@ class Scraper(object):
                             else:
                                 logging.warn("String '%s' not found in configured RESULT_STRINGS", value)
                                 if self.options.verbose:
-                                    print "WARNING: String '%s' not found in RESULT_STRINGS\n", value
+                                    print "WARNING: String '%s' not found in RESULT_STRINGS\n" % value
                                 agendaitems[agendaitem_id]['result'] = value
                         elif label == 'Bemerkung:':
                             agendaitems[agendaitem_id]['result_note'] = value
@@ -491,11 +490,12 @@ class Scraper(object):
                             self.submission_queue.add(parsed['submission_id'])
                 else:
                     if current_category == 'subordinates':
-                        for link in tds[n + 1].xpath('a'):
-                            href = link.get('href')
-                            parsed = parse.search(self.urls['SUBMISSION_DETAIL_PARSE_PATTERN'], href)
-                            if hasattr(self, 'submission_queue') and parsed is not None:
-                                self.submission_queue.add(parsed['submission_id'])
+                        if (n + 1) in tds:
+                            for link in tds[n + 1].xpath('a'):
+                                href = link.get('href')
+                                parsed = parse.search(self.urls['SUBMISSION_DETAIL_PARSE_PATTERN'], href)
+                                if hasattr(self, 'submission_queue') and parsed is not None:
+                                    self.submission_queue.add(parsed['submission_id'])
 
             if not hasattr(submission, 'identifier'):
                 logging.critical('Cannot find session identifier using SESSION_DETAIL_IDENTIFIER_TD_XPATH')
@@ -541,8 +541,18 @@ class Scraper(object):
                             #print "Form found: '%s'" % mform
                             for control in mform.controls:
                                 if control.name == 'DT' and control.value == attachment_id:
-                                    attachment = self.get_attachment_file(attachment, mform)
-                                    submission.attachments.append(attachment)
+                                    got_attachment = False
+                                    try:
+                                        attachment = self.get_attachment_file(attachment, mform)
+                                        got_attachment = True
+                                    except:
+                                        # Second attempt in case of a stupid network error
+                                        # (see #22)
+                                        time.sleep(3)
+                                        attachment = self.get_attachment_file(attachment, mform)
+                                        got_attachment = True
+                                    if got_attachment:
+                                        submission.attachments.append(attachment)
 
         # forcing overwrite=True here
         oid = self.db.save_submission(submission)
@@ -566,7 +576,6 @@ class Scraper(object):
             mform_response = mechanize.urlopen(mechanize_request)
             mform_url = mform_response.geturl()
             if self.list_in_string(self.urls['ATTACHMENT_DOWNLOAD_TARGET'], mform_url):
-                #print "Response headers:", mform_response.info()
                 attachment.content = mform_response.read()
                 attachment.mimetype = magic.from_buffer(attachment.content, mime=True)
                 attachment.filename = self.make_attachment_filename(attachment.identifier, attachment.mimetype)
